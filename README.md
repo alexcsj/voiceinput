@@ -36,13 +36,9 @@ GNOME Shell 擴充功能：在 top panel 常駐一個麥克風按鈕，點擊（
 
 > 目前僅支援 **Wayland** session（用 `wl-copy` 操作剪貼簿）。
 
-### 一鍵安裝
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/alexcsj/voiceinput/main/install.sh | bash
-```
-
-### 或先 clone 再裝
+> 這個 repo 目前是 **private**，`curl | bash` 一鍵安裝連結需要能公開存取才有用；
+> 在轉成 public 之前請用下面 clone 的方式安裝（`git clone` 私有 repo 需要你自己
+> 已經有存取權限，例如已用 `gh auth login` 登入或設定過 SSH key）。
 
 ```bash
 git clone https://github.com/alexcsj/voiceinput.git
