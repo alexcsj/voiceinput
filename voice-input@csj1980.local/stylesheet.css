@@ -1,0 +1,41 @@
+.voice-input-box {
+    spacing: 2px;
+}
+
+.voice-input-icon {
+    padding: 0 0 0 4px;
+}
+
+.voice-input-lang-badge {
+    font-size: 0.75em;
+    opacity: 0.75;
+    padding: 0 4px 0 0;
+}
+
+.voice-input-icon-recording {
+    color: #e01b24;
+}
+
+.voice-input-icon-processing {
+    color: #f5c211;
+}
+
+.voice-input-key-dialog-title {
+    font-weight: bold;
+    font-size: 1.1em;
+    padding-bottom: 4px;
+}
+
+.voice-input-key-dialog-hint {
+    opacity: 0.8;
+    padding-bottom: 12px;
+}
+
+.voice-input-key-dialog-entry {
+    padding-bottom: 6px;
+}
+
+.voice-input-key-dialog-error {
+    color: #e01b24;
+    padding-top: 6px;
+}

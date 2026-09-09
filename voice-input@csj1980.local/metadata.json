@@ -1,0 +1,7 @@
+{
+  "uuid": "voice-input@csj1980.local",
+  "name": "語音輸入",
+  "description": "在頂部工作列顯示語音輸入按鈕，點擊（或按 Ctrl+Super+V）開始持續聆聽，說話停頓時自動分段送到 Groq 雲端 Whisper API 轉成文字並即時貼上，再按一次結束",
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "url": ""
+}
