@@ -180,11 +180,15 @@ export default class VoiceInputExtension extends Extension {
     }
 
     _selectProviderMode(mode) {
-        if (mode === this._providerMode) return;
+        // 先檢查 key，不要因為「本來就是目前選中的服務商」就跳過──
+        // groq 是預設值，全新安裝時 this._providerMode 一開始就是
+        // 'groq'，如果只在「真的要切換」時才檢查，使用者點選單裡本來
+        // 就打勾的 Groq 項目會完全沒反應，永遠看不到輸入 key 的對話框。
         if (!this._hasApiKey(mode)) {
-            this._promptForApiKey(mode);
+            this._promptForApiKey(mode, () => this._applyProviderMode(mode));
             return;
         }
+        if (mode === this._providerMode) return;
         this._applyProviderMode(mode);
     }
 
@@ -224,7 +228,7 @@ export default class VoiceInputExtension extends Extension {
         }
     }
 
-    _promptForApiKey(mode) {
+    _promptForApiKey(mode, onSaved) {
         const dialog = new ModalDialog.ModalDialog({ styleClass: 'voice-input-key-dialog' });
 
         dialog.contentLayout.add_child(new St.Label({
@@ -258,7 +262,7 @@ export default class VoiceInputExtension extends Extension {
             }
             this._saveApiKey(mode, key);
             dialog.close();
-            this._applyProviderMode(mode);
+            if (onSaved) onSaved();
         };
 
         entry.clutter_text.connect('activate', trySave);
@@ -353,6 +357,14 @@ export default class VoiceInputExtension extends Extension {
     }
 
     _runToggleScript() {
+        // 只有「要開始聆聽」才需要檢查 key──錄音中按下是要結束，不該被
+        // 擋。這裡是左鍵點圖示/按快捷鍵的路徑，跟選單裡選服務商是分開
+        // 的兩條路：新裝機器預設就是 Groq，使用者很可能直接點圖示開始
+        // 用，根本不會先去點開選單，所以這裡也要擋一次、跳同一個對話框。
+        if (this._state !== 'recording' && !this._hasApiKey(this._providerMode)) {
+            this._promptForApiKey(this._providerMode, () => this._runToggleScript());
+            return;
+        }
         if (!GLib.file_test(this._scriptPath, GLib.FileTest.IS_EXECUTABLE)) {
             Main.notifyError('語音輸入', `找不到可執行的腳本：${this._scriptPath}`);
             return;
