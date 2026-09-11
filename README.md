@@ -44,23 +44,13 @@ GNOME Shell 擴充功能：在 top panel 常駐一個麥克風按鈕，點擊（
 
 > 目前僅支援 **Wayland** session（用 `wl-copy` 操作剪貼簿）。
 
-> 這個 repo 目前是 **private**，一般的 `curl | bash` 連結（匿名抓
-> `raw.githubusercontent.com`）對私有 repo 沒用，要用下面兩種需要先有存取
-> 權限的方式代替。
-
-**方法一：用 `gh` CLI（這台電腦已經 `gh auth login` 過的話最省事）**
+### 一鍵安裝
 
 ```bash
-bash -c 'd=$(mktemp -d) && gh repo clone alexcsj/voiceinput "$d" -- --depth=1 && "$d/install.sh"'
+curl -fsSL https://raw.githubusercontent.com/alexcsj/voiceinput/main/install.sh | bash
 ```
 
-**方法二：用 SSH（GitHub 帳號設定裡加過這台電腦的 SSH 公鑰）**
-
-```bash
-bash -c 'd=$(mktemp -d) && git clone --depth=1 git@github.com:alexcsj/voiceinput.git "$d" && "$d/install.sh"'
-```
-
-兩種都是真的單行指令（`bash -c` 包起來的複合指令），clone 到 `/tmp` 底下的暫存資料夾，裝完不會留著，事後可以自己刪掉那個資料夾（指令會印出路徑）。沒有 `gh`/SSH 存取權限的話，回到下面手動 clone 的方式：
+### 或先 clone 再裝
 
 ```bash
 git clone https://github.com/alexcsj/voiceinput.git
