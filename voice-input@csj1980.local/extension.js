@@ -16,12 +16,13 @@ const LANG_MODES = ['zh-hant', 'zh-hans', 'auto', 'en', 'ja'];
 const LANG_BADGES = { 'zh-hant': '繁', 'zh-hans': '簡', auto: '中英', en: 'EN', ja: '日' };
 const LANG_NAMES = { 'zh-hant': '繁體中文', 'zh-hans': '簡體中文', auto: '中英混雜', en: '純英文', ja: '日文' };
 
-const PROVIDER_MODES = ['groq', 'google'];
-const PROVIDER_NAMES = { groq: 'Groq (Whisper)', google: 'Google Cloud STT' };
-const PROVIDER_KEY_FILES = { groq: 'groq_api_key', google: 'google_api_key' };
+const PROVIDER_MODES = ['groq', 'google', 'grok'];
+const PROVIDER_NAMES = { groq: 'Groq (Whisper)', google: 'Google Cloud STT', grok: 'Grok (xAI)' };
+const PROVIDER_KEY_FILES = { groq: 'groq_api_key', google: 'google_api_key', grok: 'grok_api_key' };
 const PROVIDER_KEY_HELP = {
     groq: '到 console.groq.com/keys 建立 API key',
     google: '到 Google Cloud Console 啟用 Cloud Speech-to-Text API 後，\n在憑證頁面建立「API 金鑰」（不是 OAuth 用戶端 ID）',
+    grok: '到 console.x.ai 的 API Keys 頁面建立 key（xai- 開頭）',
 };
 
 export default class VoiceInputExtension extends Extension {

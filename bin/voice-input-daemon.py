@@ -39,12 +39,14 @@ PID_FILE = STATE_DIR / 'record.pid'
 CONFIG_DIR = pathlib.Path.home() / '.config' / 'voice-input'
 GROQ_KEY_FILE = CONFIG_DIR / 'groq_api_key'
 GOOGLE_KEY_FILE = CONFIG_DIR / 'google_api_key'
+GROK_KEY_FILE = CONFIG_DIR / 'grok_api_key'
 LANG_CONFIG_FILE = CONFIG_DIR / 'language'
 PROVIDER_CONFIG_FILE = CONFIG_DIR / 'provider'
 
 
 VALID_MODES = ('zh-hant', 'zh-hans', 'auto', 'en', 'ja')
-VALID_PROVIDERS = ('groq', 'google')
+VALID_PROVIDERS = ('groq', 'google', 'grok')
+_KEY_FILES = {'groq': GROQ_KEY_FILE, 'google': GOOGLE_KEY_FILE, 'grok': GROK_KEY_FILE}
 
 
 def _resolve_provider():
@@ -58,7 +60,7 @@ def _resolve_provider():
 
 
 PROVIDER = _resolve_provider()
-KEY_FILE = GROQ_KEY_FILE if PROVIDER == 'groq' else GOOGLE_KEY_FILE
+KEY_FILE = _KEY_FILES[PROVIDER]
 
 
 def _resolve_language_mode():
@@ -77,19 +79,24 @@ def _resolve_language_mode():
 
 LANGUAGE_MODE = _resolve_language_mode()
 
-# Whisper（Groq）的 language 參數只認得基礎的 'zh'，簡繁是轉錄完之後再用
-# OpenCC 轉換固定輸出的腳本：zh-hant 用 s2twp 轉成台灣慣用字詞，
-# zh-hans 用 tw2sp 轉成大陸標準字詞（不只轉字形，連「軟體/網路」這種
+# Whisper（Groq）跟 Grok(xAI) 的 language 參數都只認得基礎的 'zh'，簡繁是
+# 轉錄完之後再用 OpenCC 轉換固定輸出的腳本：zh-hant 用 s2twp 轉成台灣慣用
+# 字詞，zh-hans 用 tw2sp 轉成大陸標準字詞（不只轉字形，連「軟體/網路」這種
 # 台灣說法也會一併轉成「软件/网络」）。Google STT 用 BCP-47 語言代碼
-# （zh-TW/zh-CN）可以直接指定輸出腳本，不需要這一步，所以只在 Groq 時才
-# 建立轉換器。
-_OPENCC_CONFIG = {'zh-hant': 's2twp', 'zh-hans': 'tw2sp'}.get(LANGUAGE_MODE) if PROVIDER == 'groq' else None
+# （zh-TW/zh-CN）可以直接指定輸出腳本，不需要這一步，所以只在 Groq/Grok
+# 時才建立轉換器。
+_OPENCC_CONFIG = {'zh-hant': 's2twp', 'zh-hans': 'tw2sp'}.get(LANGUAGE_MODE) if PROVIDER in ('groq', 'grok') else None
 _opencc_converter = None
 if _OPENCC_CONFIG:
     import opencc
     _opencc_converter = opencc.OpenCC(_OPENCC_CONFIG)
 
 _WHISPER_LANG = {'zh-hant': 'zh', 'zh-hans': 'zh', 'en': 'en', 'ja': 'ja'}.get(LANGUAGE_MODE)
+# xAI 的 STT API 文件裡 language 參數說明是「用來做文字格式化(數字/日期
+# 正規化)」，不確定是不是嚴格限制辨識語言，但用法（en/fr/de 這種基礎
+# ISO 代碼）跟 Whisper 一致，所以沿用跟 Groq 一樣的映射；auto 模式不帶
+# language，讓它自己判斷。
+_GROK_LANG = _WHISPER_LANG
 
 # Google STT 用 BCP-47 語言代碼，且可以直接指定繁體/簡體，不用事後轉換。
 # 'auto'（中英混雜）用「主要中文＋英文備選」近似，這不是真正的自動語言
@@ -283,9 +290,61 @@ def _transcribe_google(pcm_bytes, api_key):
     return text
 
 
+def _transcribe_grok(pcm_bytes, seg_index, api_key):
+    import requests
+
+    wav_path = STATE_DIR / f'segment-{seg_index}.wav'
+    with wave.open(str(wav_path), 'wb') as wf:
+        wf.setnchannels(CHANNELS)
+        wf.setsampwidth(SAMPLE_WIDTH)
+        wf.setframerate(RATE)
+        wf.writeframes(pcm_bytes)
+
+    data = {}
+    if _GROK_LANG:
+        data['language'] = _GROK_LANG
+
+    text = ''
+    try:
+        with open(wav_path, 'rb') as f:
+            # xAI 文件要求 file 欄位要放在其他參數後面；requests 用分開的
+            # data/files 參數時，序列化順序本來就是 data 先、files 後，
+            # 天然符合這個要求，不用特別處理。
+            resp = requests.post(
+                'https://api.x.ai/v1/stt',
+                headers={'Authorization': f'Bearer {api_key}'},
+                data=data,
+                files={'file': (wav_path.name, f, 'audio/wav')},
+                timeout=30,
+            )
+        if resp.ok:
+            payload = resp.json()
+            text = (payload.get('text') or '').strip()
+            # xAI 的回應不像 Groq 有 no_speech_prob/avg_logprob 這種信心
+            # 分數可以拿來過濾幻覺，只能靠已知幻覺套語黑名單當防線
+            if _looks_hallucinated(text):
+                text = ''
+        else:
+            print(f'轉文字失敗(Grok): HTTP {resp.status_code} {resp.text}', file=sys.stderr)
+    except Exception as e:
+        print(f'轉文字失敗(Grok): {e}', file=sys.stderr)
+    finally:
+        try:
+            wav_path.unlink()
+        except FileNotFoundError:
+            pass
+
+    if text and _opencc_converter:
+        text = _opencc_converter.convert(text)
+
+    return text
+
+
 def _transcribe_and_paste(pcm_bytes, seg_index, api_key):
     if PROVIDER == 'google':
         text = _transcribe_google(pcm_bytes, api_key)
+    elif PROVIDER == 'grok':
+        text = _transcribe_grok(pcm_bytes, seg_index, api_key)
     else:
         text = _transcribe_groq(pcm_bytes, seg_index, api_key)
 
@@ -308,7 +367,7 @@ def _worker_loop(seg_queue, api_key):
 
 
 def main():
-    provider_label = 'Groq' if PROVIDER == 'groq' else 'Google Cloud'
+    provider_label = {'groq': 'Groq', 'google': 'Google Cloud', 'grok': 'Grok (xAI)'}[PROVIDER]
     if not KEY_FILE.exists() or not KEY_FILE.read_text().strip():
         _notify(f'⚠️ 找不到 {provider_label} API key ({KEY_FILE})')
         sys.exit(1)
