@@ -33,6 +33,9 @@ ABS_MIN_RMS = float(os.environ.get('VOICE_INPUT_MIN_RMS', '150'))
 PREROLL_MS = int(os.environ.get('VOICE_INPUT_PREROLL_MS', '300'))
 # 標準版 WER 較低（10.3% vs turbo 12%），短片段的延遲差異可忽略，優先選準確度
 MODEL = os.environ.get('VOICE_INPUT_MODEL', 'whisper-large-v3')
+# 本地 Whisper（faster-whisper）用的模型大小，CPU 環境下 base 是官方建議的
+# 起始點（約 5-10x real-time），準確度要求高可以換 small/medium，但會變慢
+LOCAL_MODEL_SIZE = os.environ.get('VOICE_INPUT_LOCAL_MODEL', 'base')
 
 STATE_DIR = pathlib.Path(os.environ.get('XDG_RUNTIME_DIR', '/tmp')) / 'voice-input'
 PID_FILE = STATE_DIR / 'record.pid'
@@ -45,7 +48,8 @@ PROVIDER_CONFIG_FILE = CONFIG_DIR / 'provider'
 
 
 VALID_MODES = ('zh-hant', 'zh-hans', 'auto', 'en', 'ja')
-VALID_PROVIDERS = ('groq', 'google', 'grok')
+VALID_PROVIDERS = ('groq', 'google', 'grok', 'local')
+# 'local' 不用 key 檔案，故意不放進這張表；查不到就代表不需要 key
 _KEY_FILES = {'groq': GROQ_KEY_FILE, 'google': GOOGLE_KEY_FILE, 'grok': GROK_KEY_FILE}
 
 
@@ -60,7 +64,7 @@ def _resolve_provider():
 
 
 PROVIDER = _resolve_provider()
-KEY_FILE = _KEY_FILES[PROVIDER]
+KEY_FILE = _KEY_FILES.get(PROVIDER)
 
 
 def _resolve_language_mode():
@@ -79,17 +83,19 @@ def _resolve_language_mode():
 
 LANGUAGE_MODE = _resolve_language_mode()
 
-# Whisper（Groq）跟 Grok(xAI) 的 language 參數都只認得基礎的 'zh'，簡繁是
-# 轉錄完之後再用 OpenCC 轉換固定輸出的腳本：zh-hant 用 s2twp 轉成台灣慣用
-# 字詞，zh-hans 用 tw2sp 轉成大陸標準字詞（不只轉字形，連「軟體/網路」這種
-# 台灣說法也會一併轉成「软件/网络」）。Google STT 用 BCP-47 語言代碼
-# （zh-TW/zh-CN）可以直接指定輸出腳本，不需要這一步，所以只在 Groq/Grok
-# 時才建立轉換器。
-_OPENCC_CONFIG = {'zh-hant': 's2twp', 'zh-hans': 'tw2sp'}.get(LANGUAGE_MODE) if PROVIDER in ('groq', 'grok') else None
+# Whisper（Groq、本地 faster-whisper）跟 Grok(xAI) 的 language 參數都只認得
+# 基礎的 'zh'，簡繁是轉錄完之後再用 OpenCC 轉換固定輸出的腳本：zh-hant 用
+# s2twp 轉成台灣慣用字詞，zh-hans 用 tw2sp 轉成大陸標準字詞（不只轉字形，
+# 連「軟體/網路」這種台灣說法也會一併轉成「软件/网络」）。Google STT 用
+# BCP-47 語言代碼（zh-TW/zh-CN）可以直接指定輸出腳本，不需要這一步。
+_OPENCC_CONFIG = {'zh-hant': 's2twp', 'zh-hans': 'tw2sp'}.get(LANGUAGE_MODE) if PROVIDER in ('groq', 'grok', 'local') else None
 _opencc_converter = None
 if _OPENCC_CONFIG:
-    import opencc
-    _opencc_converter = opencc.OpenCC(_OPENCC_CONFIG)
+    try:
+        import opencc
+        _opencc_converter = opencc.OpenCC(_OPENCC_CONFIG)
+    except ImportError:
+        print('警告：找不到 opencc 套件，繁簡轉換會被跳過', file=sys.stderr)
 
 _WHISPER_LANG = {'zh-hant': 'zh', 'zh-hans': 'zh', 'en': 'en', 'ja': 'ja'}.get(LANGUAGE_MODE)
 # xAI 的 STT API 文件裡 language 參數說明是「用來做文字格式化(數字/日期
@@ -340,11 +346,54 @@ def _transcribe_grok(pcm_bytes, seg_index, api_key):
     return text
 
 
-def _transcribe_and_paste(pcm_bytes, seg_index, api_key):
+def _load_local_model():
+    """本地 Whisper 模型只在整個聆聽階段載入一次，不是每段語音都重載——
+    光載入模型權重就要幾秒鐘，逐段重載會慢到沒辦法用。"""
+    from faster_whisper import WhisperModel
+    return WhisperModel(LOCAL_MODEL_SIZE, device='cpu', compute_type='int8')
+
+
+def _transcribe_local(pcm_bytes, model):
+    import numpy as np
+
+    # faster-whisper 的 audio 參數可以直接吃 numpy float32 陣列，不用先寫
+    # 成 wav 檔再讓它用 ffmpeg 解碼一次，省掉一個外部相依套件跟磁碟 I/O。
+    # Whisper 系列模型固定吃 16-bit PCM 正規化到 [-1, 1] 的 float32。
+    audio = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+
+    text = ''
+    try:
+        segments, _info = model.transcribe(
+            audio,
+            language=_WHISPER_LANG,
+            beam_size=5,
+        )
+        kept = []
+        for seg in segments:
+            # faster-whisper 的 Segment 跟 Groq 的 verbose_json 是同一套
+            # 欄位（no_speech_prob/avg_logprob），沿用一樣的雙層過濾
+            if seg.no_speech_prob > NO_SPEECH_THRESHOLD or seg.avg_logprob < LOGPROB_THRESHOLD:
+                continue
+            if _looks_hallucinated(seg.text):
+                continue
+            kept.append(seg.text)
+        text = ''.join(kept).strip()
+    except Exception as e:
+        print(f'轉文字失敗(本地 Whisper): {e}', file=sys.stderr)
+
+    if text and _opencc_converter:
+        text = _opencc_converter.convert(text)
+
+    return text
+
+
+def _transcribe_and_paste(pcm_bytes, seg_index, api_key, model=None):
     if PROVIDER == 'google':
         text = _transcribe_google(pcm_bytes, api_key)
     elif PROVIDER == 'grok':
         text = _transcribe_grok(pcm_bytes, seg_index, api_key)
+    elif PROVIDER == 'local':
+        text = _transcribe_local(pcm_bytes, model)
     else:
         text = _transcribe_groq(pcm_bytes, seg_index, api_key)
 
@@ -356,22 +405,36 @@ def _transcribe_and_paste(pcm_bytes, seg_index, api_key):
     _paste()
 
 
-def _worker_loop(seg_queue, api_key):
+def _worker_loop(seg_queue, api_key, model=None):
     seg_index = 0
     while True:
         item = seg_queue.get()
         if item is None:
             break
         seg_index += 1
-        _transcribe_and_paste(item, seg_index, api_key)
+        _transcribe_and_paste(item, seg_index, api_key, model)
 
 
 def main():
-    provider_label = {'groq': 'Groq', 'google': 'Google Cloud', 'grok': 'Grok (xAI)'}[PROVIDER]
-    if not KEY_FILE.exists() or not KEY_FILE.read_text().strip():
-        _notify(f'⚠️ 找不到 {provider_label} API key ({KEY_FILE})')
-        sys.exit(1)
-    api_key = KEY_FILE.read_text().strip()
+    api_key = None
+    model = None
+
+    if PROVIDER == 'local':
+        _notify('⏳ 正在載入本地 Whisper 模型…（第一次使用要先下載，可能要等一下）')
+        try:
+            model = _load_local_model()
+        except ImportError:
+            _notify('⚠️ 找不到 faster-whisper，請先安裝：pip install faster-whisper（Arch 上可能需要加 --break-system-packages，或用虛擬環境）')
+            sys.exit(1)
+        except Exception as e:
+            _notify(f'⚠️ 載入本地 Whisper 模型失敗：{e}')
+            sys.exit(1)
+    else:
+        provider_label = {'groq': 'Groq', 'google': 'Google Cloud', 'grok': 'Grok (xAI)'}[PROVIDER]
+        if not KEY_FILE.exists() or not KEY_FILE.read_text().strip():
+            _notify(f'⚠️ 找不到 {provider_label} API key ({KEY_FILE})')
+            sys.exit(1)
+        api_key = KEY_FILE.read_text().strip()
 
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     # 自己回報 PID，不能靠 toggle.sh 的 `setsid ... & echo $!`：setsid 在
@@ -383,7 +446,7 @@ def main():
     PID_FILE.write_text(str(os.getpid()))
 
     seg_queue = queue.Queue()
-    worker = threading.Thread(target=_worker_loop, args=(seg_queue, api_key), daemon=True)
+    worker = threading.Thread(target=_worker_loop, args=(seg_queue, api_key, model), daemon=True)
     worker.start()
 
     proc = subprocess.Popen(

@@ -16,14 +16,15 @@ const LANG_MODES = ['zh-hant', 'zh-hans', 'auto', 'en', 'ja'];
 const LANG_BADGES = { 'zh-hant': '繁', 'zh-hans': '簡', auto: '中英', en: 'EN', ja: '日' };
 const LANG_NAMES = { 'zh-hant': '繁體中文', 'zh-hans': '簡體中文', auto: '中英混雜', en: '純英文', ja: '日文' };
 
-const PROVIDER_MODES = ['groq', 'google', 'grok'];
-const PROVIDER_NAMES = { groq: 'Groq (Whisper)', google: 'Google Cloud STT', grok: 'Grok (xAI)' };
+const PROVIDER_MODES = ['groq', 'google', 'grok', 'local'];
+const PROVIDER_NAMES = { groq: 'Groq (Whisper)', google: 'Google Cloud STT', grok: 'Grok (xAI)', local: '本地 Whisper' };
 const PROVIDER_KEY_FILES = { groq: 'groq_api_key', google: 'google_api_key', grok: 'grok_api_key' };
 const PROVIDER_KEY_HELP = {
     groq: '到 console.groq.com/keys 建立 API key',
     google: '到 Google Cloud Console 啟用 Cloud Speech-to-Text API 後，\n在憑證頁面建立「API 金鑰」（不是 OAuth 用戶端 ID）',
     grok: '到 console.x.ai 的 API Keys 頁面建立 key（xai- 開頭）',
 };
+// 'local' 故意不在 PROVIDER_KEY_FILES 裡──不需要 API key，跑在自己電腦上
 
 export default class VoiceInputExtension extends Extension {
     enable() {
@@ -206,6 +207,10 @@ export default class VoiceInputExtension extends Extension {
     }
 
     _hasApiKey(mode) {
+        // 不在 PROVIDER_KEY_FILES 表裡的服務商(目前只有 local)不需要
+        // key，直接當作「已經有」，這樣 _selectProviderMode/
+        // _runToggleScript 兩處呼叫端完全不用另外判斷
+        if (!PROVIDER_KEY_FILES[mode]) return true;
         try {
             const [, contents] = GLib.file_get_contents(this._keyFilePath(mode));
             return new TextDecoder('utf-8').decode(contents).trim().length > 0;

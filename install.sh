@@ -89,6 +89,20 @@ fi
 
 log "相依套件 OK"
 
+# 本地 Whisper（faster-whisper）是選用功能，不裝也能用 Groq/Google/Grok
+# 三個雲端服務，所以缺少不擋安裝，只是提醒一下要另外裝什麼。
+if command -v python3 >/dev/null 2>&1; then
+    if ! python3 -c "import faster_whisper" >/dev/null 2>&1; then
+        echo
+        log "（選用）沒偵測到 faster-whisper，本地 Whisper 服務商暫時不能用。"
+        echo "    大部分發行版沒有官方套件，需要用 pip 裝："
+        echo "      pip install --break-system-packages faster-whisper"
+        echo "    （或自己建一個虛擬環境；Arch 的 python-numpy 官方套件有，"
+        echo "    可以先 sudo pacman -S python-numpy 裝起來）"
+        echo "    第一次使用本地模式時會自動下載模型（預設 base，約 145MB）。"
+    fi
+fi
+
 # --- 3. 安裝 GNOME Shell 擴充功能 ------------------------------------------
 mkdir -p "$EXTENSIONS_DIR"
 
@@ -169,5 +183,6 @@ else
 fi
 echo
 echo "啟用後，點面板上的麥克風圖示或按 Ctrl+Super+V 第一次使用時，"
-echo "會跳出對話框請你輸入 Groq 或 Google Cloud Speech-to-Text 的 API key。"
+echo "會跳出對話框請你輸入 Groq / Google Cloud Speech-to-Text / Grok(xAI) 的 API key"
+echo "（右鍵選單選「本地 Whisper」的話不用 key，但要先裝好 faster-whisper）。"
 echo "設定檔資料夾：$CONFIG_DIR"
